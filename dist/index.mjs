@@ -1,12 +1,12 @@
 // src/index.ts
-import path from "path";
 import fs from "fs";
+import path from "path";
+import c from "ansi-colors";
 import { globSync } from "glob";
 import { minimatch } from "minimatch";
-import c from "ansi-colors";
 function sassGlobImports(options = {}) {
   const FILE_REGEX = /\.s[c|a]ss(\?direct)?$/;
-  const IMPORT_REGEX = /^([ \t]*(?:\/\*.*)?)@(import|use)\s+["']([^"']+\*[^"']*(?:\.scss|\.sass)?)["'];?([ \t]*(?:\/[/*].*)?)$/gm;
+  const IMPORT_REGEX = /^([ \t]*(?:\/\*.*\*\/)?)@(import|use|include)\s+(meta\.load-css\()?["']([^"']+\*[^"']*(?:\.scss|\.sass)?)["']\)?;?([ \t]*(?:\/[/*].*)?)$/gm;
   let filePath = "";
   let fileName = "";
   function isSassOrScss(filename) {
@@ -21,7 +21,7 @@ function sassGlobImports(options = {}) {
     for (let i = 0; i < contentLinesCount; i++) {
       result = [...src.matchAll(IMPORT_REGEX)];
       if (result.length) {
-        const [importRule, startComment, importType, globPattern, endComment] = result[0];
+        const [importRule, startComment, importType, metaLoadException, globPattern, endComment] = result[0];
         let files = [];
         let basePath = "";
         for (let i2 = 0; i2 < searchBases.length; i2++) {
@@ -42,14 +42,31 @@ function sassGlobImports(options = {}) {
           }
         }
         let imports = [];
-        files.forEach((filename) => {
+        files.forEach((filename, index) => {
           if (isSassOrScss(filename)) {
             filename = path.relative(basePath, filename).replace(/\\/g, "/");
             filename = filename.replace(/^\//, "");
-            if (!ignorePaths.some((ignorePath) => {
+            if (!ignorePaths.some((ignorePath = "") => {
               return minimatch(filename, ignorePath);
             })) {
-              imports.push(`@${importType} "` + filename + '"' + (isSass ? "" : ";"));
+              if (importType === "use" && options.namespace) {
+                let namespaceExport = "";
+                let namespace = "";
+                if (typeof options.namespace === "function") {
+                  const computedNamespace = options.namespace(filename, index);
+                  namespace = typeof computedNamespace === "string" ? computedNamespace : "";
+                } else if (typeof options.namespace === "string") {
+                  namespace = options.namespace;
+                }
+                if (namespace.length) {
+                  namespaceExport = `as ${namespace}`;
+                }
+                imports.push(`@${importType} "${filename}" ${namespaceExport}${isSass ? "" : ";"}`);
+              } else if (importType === "include" && metaLoadException) {
+                imports.push(`@${importType} meta.load-css("${filename}")${isSass ? "" : ";"}`);
+              } else {
+                imports.push(`@${importType} "${filename}"${isSass ? "" : ";"}`);
+              }
             }
           }
         });
@@ -59,6 +76,7 @@ function sassGlobImports(options = {}) {
         if (endComment) {
           imports.push(endComment);
         }
+        imports = imports.filter((item) => item.trim() != "");
         const replaceString = imports.join("\n");
         src = src.replace(importRule, replaceString);
       }
